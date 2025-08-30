@@ -11,7 +11,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
-import time
 
 # Загрузка переменных из .env
 load_dotenv()
@@ -34,7 +33,7 @@ if not TELEGRAM_TOKEN or not API_KEY:
 
 # Список лиг с кодами
 LEAGUES = {
-    '🏴 Англия (Premier League)': 'PL',
+    '🇬🇧 Англия (Premier League)': 'PL',
     '🇪🇸 Испания (La Liga)': 'PD',
     '🇩🇪 Германия (Bundesliga)': 'BL1',
     '🇫🇷 Франция (Ligue 1)': 'FL1',
@@ -43,7 +42,7 @@ LEAGUES = {
     '🇵🇹 Португалия (Primeira Liga)': 'PPL',
     '🇺🇦 Украина (Premier League)': 'UPL',
     '🇧🇪 Бельгия (Pro League)': 'BPD',
-    '🏴 Шотландия (Premiership)': 'SPL'
+    '🇬🇧 Шотландия (Premiership)': 'SPL'
 }
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -81,7 +80,6 @@ def fetch_api_fixtures(league_code: str, match_date: str) -> str:
     logger.info(f"API-запрос: лига={league_code}, дата={match_date}")
     url = f'https://api.football-data.org/v4/competitions/{league_code}/matches?dateFrom={match_date}&dateTo={match_date}'
     headers = {'X-Auth-Token': API_KEY}
-
     try:
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
@@ -98,7 +96,6 @@ def fetch_api_fixtures(league_code: str, match_date: str) -> str:
             time_utc = match['utcDate'][11:16]
             status = match['status']
             result += f"🏟️ {home} vs {away}\n🕒 Время (UTC): {time_utc}\n📊 Статус: {status}\n\n"
-
         return result
     except requests.RequestException as e:
         logger.error(f"Ошибка API: {e}")
@@ -113,66 +110,97 @@ def fetch_upl_fixtures(match_date: str) -> str:
     try:
         chrome_options = Options()
         chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--no-sandbox")
         driver = webdriver.Chrome(options=chrome_options)
-        driver.get(url)
-        logger.info(f"Страница загружена, URL: {url}")
 
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        driver.quit()
+        try:
+            driver.get(url)
+            logger.info(f"Страница загружена, URL: {url}")
+
+            # Явное ожидание загрузки матчей
+            wait = WebDriverWait(driver, 15)
+            wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, "event__match")))
+
+            # Получение исходного кода страницы после полной загрузки
+            soup = BeautifulSoup(driver.page_source, "html.parser")
+        finally:
+            driver.quit()
 
         result = f"📅 Расписание УПЛ на {match_date}:\n\n"
         matches = soup.find_all("div", class_="event__match")
         logger.info(f"Найдено матчей: {len(matches)}")
 
         found = False
+        target_date = datetime.strptime(match_date, "%Y-%m-%d").date()
+        current_year = date.today().year
+
         for match in matches:
-            # Извлечение даты и времени
-            time_div = match.find("div", class_="event__time")
-            if time_div:
+            try:
+                # Извлечение даты и времени
+                time_div = match.find("div", class_="event__time")
+                if not time_div:
+                    logger.warning(f"Пропущен матч: нет event__time, HTML: {match}")
+                    continue
+
                 date_time_str = time_div.text.strip()
                 logger.info(f"Обрабатываем матч, date_time_str={date_time_str}")
 
-                # Парсинг даты и времени
+                # Парсинг даты и времени (формат: DD.MM. HH:MM)
                 parts = date_time_str.split(' ')
                 if len(parts) != 2:
                     logger.warning(f"Неверный формат даты: {date_time_str}")
                     continue
 
                 date_str, time_str = parts
-                date_str = date_str.replace('.', '')
-
                 try:
-                    site_date = f"2025-{date_str[2:4]}-{date_str[0:2]}"
-                    logger.info(f"Извлечённая дата: {site_date}, искомая: {match_date}")
-                except IndexError:
+                    # Определяем год: если месяц раньше текущего, используем следующий год
+                    parsed_date = datetime.strptime(f"{date_str}{current_year}", "%d.%m.%Y").date()
+                    if parsed_date.month < target_date.month and target_date.month >= date.today().month:
+                        parsed_date = datetime.strptime(f"{date_str}{current_year + 1}", "%d.%m.%Y").date()
+                except ValueError:
                     logger.warning(f"Ошибка формата даты: {date_str}")
                     continue
 
-                if site_date != match_date:
+                logger.info(f"Извлечённая дата: {parsed_date}, искомая: {target_date}")
+                if parsed_date != target_date:
                     continue
 
-                # Извлечение команд
-                home = match.find("div", class_="event__participant--home").text.strip() if match.find("div",
-                                                                                                       class_="event__participant--home") else "N/A"
-                away = match.find("div", class_="event__participant--away").text.strip() if match.find("div",
-                                                                                                       class_="event__participant--away") else "N/A"
-                logger.info(f"Домашняя команда: {home}, Гостевая команда: {away}")
+                # Извлечение команд с альтернативными классами
+                home = None
+                away = None
+                for home_class in ["event__participant--home", "event__homeParticipant"]:
+                    home_elem = match.find("div", class_=home_class)
+                    if home_elem:
+                        home = home_elem.text.strip()
+                        break
+                for away_class in ["event__participant--away", "event__awayParticipant"]:
+                    away_elem = match.find("div", class_=away_class)
+                    if away_elem:
+                        away = away_elem.text.strip()
+                        break
+
+                if not home or not away:
+                    logger.warning(f"Пропущен матч: команды не найдены, HTML: {match}")
+                    continue
 
                 # Извлечение статуса
-                status = match.find("div", class_="event__stage").text.strip() if match.find("div",
-                                                                                             class_="event__stage") else "Запланирован"
-                logger.info(f"Статус: {status}")
+                status = match.find("div", class_="event__stage")
+                status = status.text.strip() if status else "Запланирован"
 
                 result += f"🏟️ {home} vs {away}\n🕒 Время: {time_str}\n📊 Статус: {status}\n\n"
                 found = True
-            else:
-                logger.warning("Пропущен матч: нет event__time")
+
+            except Exception as e:
+                logger.error(f"Ошибка при обработке матча: {e}, HTML: {match}")
+                continue
 
         if not found:
             logger.info(f"Матчи УПЛ на {match_date} не найдены")
             return f"⚽ На {match_date} нет матчей УПЛ."
 
         return result
+
     except Exception as e:
         logger.error(f"Неожиданная ошибка в fetch_upl_fixtures: {e}")
         return "❌ Ошибка при получении данных УПЛ."
