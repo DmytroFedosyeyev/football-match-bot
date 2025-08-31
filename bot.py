@@ -33,6 +33,7 @@ if not TELEGRAM_TOKEN or not API_KEY:
 
 # Список лиг с кодами
 LEAGUES = {
+    '🏆 Лига чемпионов УЕФА': 'CL',
     '🇬🇧 Англия (Premier League)': 'PL',
     '🇪🇸 Испания (La Liga)': 'PD',
     '🇩🇪 Германия (Bundesliga)': 'BL1',
@@ -41,20 +42,17 @@ LEAGUES = {
     '🇳🇱 Нидерланды (Eredivisie)': 'DED',
     '🇵🇹 Португалия (Primeira Liga)': 'PPL',
     '🇺🇦 Украина (Premier League)': 'UPL',
-    '🇧🇪 Бельгия (Pro League)': 'BPD',
-    '🇬🇧 Шотландия (Premiership)': 'SPL'
+    '🇬🇧 Англия-2 (Championship)': 'ELC',
 }
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 user_state = {}
-
 
 def create_leagues_keyboard():
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False, row_width=2)
     buttons = [KeyboardButton(league) for league in LEAGUES.keys()]
     keyboard.add(*buttons)
     return keyboard
-
 
 def create_date_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
@@ -66,14 +64,12 @@ def create_date_keyboard():
     )
     return keyboard
 
-
 def fetch_fixtures(league_code: str, match_date: str) -> str:
     """Получает расписание матчей для указанной лиги и даты."""
     if league_code == "UPL":
         return fetch_upl_fixtures(match_date)
     else:
         return fetch_api_fixtures(league_code, match_date)
-
 
 def fetch_api_fixtures(league_code: str, match_date: str) -> str:
     """Получает расписание матчей через Football-Data.org API"""
@@ -82,8 +78,10 @@ def fetch_api_fixtures(league_code: str, match_date: str) -> str:
     headers = {'X-Auth-Token': API_KEY}
     try:
         response = requests.get(url, headers=headers, timeout=10)
+        logger.info(f"Статус ответа API: {response.status_code}, URL: {url}")
         response.raise_for_status()
         data = response.json()
+        logger.info(f"Полученные данные: {data.get('matches', [])}")
         matches = data.get('matches', [])
 
         if not matches:
@@ -100,7 +98,6 @@ def fetch_api_fixtures(league_code: str, match_date: str) -> str:
     except requests.RequestException as e:
         logger.error(f"Ошибка API: {e}")
         return "❌ Ошибка при получении данных. Попробуйте позже."
-
 
 def fetch_upl_fixtures(match_date: str) -> str:
     """Парсит расписание матчей УПЛ с flashscore.com.ua через Selenium"""
@@ -205,7 +202,6 @@ def fetch_upl_fixtures(match_date: str) -> str:
         logger.error(f"Неожиданная ошибка в fetch_upl_fixtures: {e}")
         return "❌ Ошибка при получении данных УПЛ."
 
-
 @bot.message_handler(commands=['start', 'help'])
 def handle_start_help(message):
     user_state[message.chat.id] = {}
@@ -216,16 +212,15 @@ def handle_start_help(message):
     )
     bot.send_message(message.chat.id, welcome_text, reply_markup=create_leagues_keyboard())
 
-
 @bot.message_handler(func=lambda message: message.text in LEAGUES)
 def handle_league_selection(message):
     user_state[message.chat.id] = {'league': message.text}
+    logger.info(f"Пользователь {message.chat.id} выбрал лигу: {message.text}")
     bot.send_message(
         message.chat.id,
         f"Вы выбрали {message.text}. Теперь выберите дату:",
         reply_markup=create_date_keyboard()
     )
-
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('date_'))
 def handle_date_selection(call):
@@ -243,11 +238,9 @@ def handle_date_selection(call):
     bot.answer_callback_query(call.id)
     bot.send_message(chat_id, "Выберите другую лигу или дату:", reply_markup=create_leagues_keyboard())
 
-
 @bot.message_handler(func=lambda message: True)
 def handle_unknown(message):
     bot.send_message(message.chat.id, "Пожалуйста, выберите лигу из меню или используйте /start.")
-
 
 if __name__ == '__main__':
     logger.info("Запуск бота...")
