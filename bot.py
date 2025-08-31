@@ -33,7 +33,6 @@ if not TELEGRAM_TOKEN or not API_KEY:
 
 # Список лиг с кодами
 LEAGUES = {
-    '🏆 Лига чемпионов УЕФА': 'CL',
     '🇬🇧 Англия (Premier League)': 'PL',
     '🇪🇸 Испания (La Liga)': 'PD',
     '🇩🇪 Германия (Bundesliga)': 'BL1',
@@ -43,6 +42,8 @@ LEAGUES = {
     '🇵🇹 Португалия (Primeira Liga)': 'PPL',
     '🇺🇦 Украина (Premier League)': 'UPL',
     '🇬🇧 Англия-2 (Championship)': 'ELC',
+    '🇧🇷 Бразилия (Serie A)': 'BSA',
+    '🏆 Лига чемпионов УЕФА': 'CL'
 }
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -78,10 +79,8 @@ def fetch_api_fixtures(league_code: str, match_date: str) -> str:
     headers = {'X-Auth-Token': API_KEY}
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        logger.info(f"Статус ответа API: {response.status_code}, URL: {url}")
         response.raise_for_status()
         data = response.json()
-        logger.info(f"Полученные данные: {data.get('matches', [])}")
         matches = data.get('matches', [])
 
         if not matches:
@@ -101,7 +100,7 @@ def fetch_api_fixtures(league_code: str, match_date: str) -> str:
 
 def fetch_upl_fixtures(match_date: str) -> str:
     """Парсит расписание матчей УПЛ с flashscore.com.ua через Selenium"""
-    logger.info(f"Парсим УПЛ на {match_date} с flashscore.com.ua через Selenium")
+    logger.info(f"Парсим УПЛ на {match_date} с flashscore.com.ua")
     url = "https://www.flashscore.com.ua/football/ukraine/premier-league/fixtures/"
 
     try:
@@ -113,20 +112,14 @@ def fetch_upl_fixtures(match_date: str) -> str:
 
         try:
             driver.get(url)
-            logger.info(f"Страница загружена, URL: {url}")
-
-            # Явное ожидание загрузки матчей
             wait = WebDriverWait(driver, 15)
             wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, "event__match")))
-
-            # Получение исходного кода страницы после полной загрузки
             soup = BeautifulSoup(driver.page_source, "html.parser")
         finally:
             driver.quit()
 
         result = f"📅 Расписание УПЛ на {match_date}:\n\n"
         matches = soup.find_all("div", class_="event__match")
-        logger.info(f"Найдено матчей: {len(matches)}")
 
         found = False
         target_date = datetime.strptime(match_date, "%Y-%m-%d").date()
@@ -134,36 +127,26 @@ def fetch_upl_fixtures(match_date: str) -> str:
 
         for match in matches:
             try:
-                # Извлечение даты и времени
                 time_div = match.find("div", class_="event__time")
                 if not time_div:
-                    logger.warning(f"Пропущен матч: нет event__time, HTML: {match}")
                     continue
 
                 date_time_str = time_div.text.strip()
-                logger.info(f"Обрабатываем матч, date_time_str={date_time_str}")
-
-                # Парсинг даты и времени (формат: DD.MM. HH:MM)
                 parts = date_time_str.split(' ')
                 if len(parts) != 2:
-                    logger.warning(f"Неверный формат даты: {date_time_str}")
                     continue
 
                 date_str, time_str = parts
                 try:
-                    # Определяем год: если месяц раньше текущего, используем следующий год
                     parsed_date = datetime.strptime(f"{date_str}{current_year}", "%d.%m.%Y").date()
                     if parsed_date.month < target_date.month and target_date.month >= date.today().month:
                         parsed_date = datetime.strptime(f"{date_str}{current_year + 1}", "%d.%m.%Y").date()
                 except ValueError:
-                    logger.warning(f"Ошибка формата даты: {date_str}")
                     continue
 
-                logger.info(f"Извлечённая дата: {parsed_date}, искомая: {target_date}")
                 if parsed_date != target_date:
                     continue
 
-                # Извлечение команд с альтернативными классами
                 home = None
                 away = None
                 for home_class in ["event__participant--home", "event__homeParticipant"]:
@@ -178,10 +161,8 @@ def fetch_upl_fixtures(match_date: str) -> str:
                         break
 
                 if not home or not away:
-                    logger.warning(f"Пропущен матч: команды не найдены, HTML: {match}")
                     continue
 
-                # Извлечение статуса
                 status = match.find("div", class_="event__stage")
                 status = status.text.strip() if status else "Запланирован"
 
@@ -189,7 +170,7 @@ def fetch_upl_fixtures(match_date: str) -> str:
                 found = True
 
             except Exception as e:
-                logger.error(f"Ошибка при обработке матча: {e}, HTML: {match}")
+                logger.error(f"Ошибка при обработке матча: {e}")
                 continue
 
         if not found:
